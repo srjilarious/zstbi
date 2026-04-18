@@ -379,15 +379,16 @@ pub fn setFlipVerticallyOnWrite(should_flip: bool) void {
 
 var mem_allocator: ?std.mem.Allocator = null;
 var mem_allocations: ?std.AutoHashMap(usize, usize) = null;
-var mem_mutex: std.Thread.Mutex = .{};
+var mem_mutex: std.Io.Mutex = .init;
 const mem_alignment = 16;
 
 extern var zstbiMallocPtr: ?*const fn (size: usize) callconv(.c) ?*anyopaque;
 extern var zstbiwMallocPtr: ?*const fn (size: usize) callconv(.c) ?*anyopaque;
 
 fn zstbiMalloc(size: usize) callconv(.c) ?*anyopaque {
-    mem_mutex.lock();
-    defer mem_mutex.unlock();
+    const io = std.Io.Threaded.global_single_threaded.io();
+    mem_mutex.lockUncancelable(io);
+    defer mem_mutex.unlock(io);
 
     const mem = mem_allocator.?.alignedAlloc(
         u8,
@@ -404,8 +405,9 @@ extern var zstbiReallocPtr: ?*const fn (ptr: ?*anyopaque, size: usize) callconv(
 extern var zstbiwReallocPtr: ?*const fn (ptr: ?*anyopaque, size: usize) callconv(.c) ?*anyopaque;
 
 fn zstbiRealloc(ptr: ?*anyopaque, size: usize) callconv(.c) ?*anyopaque {
-    mem_mutex.lock();
-    defer mem_mutex.unlock();
+    const io = std.Io.Threaded.global_single_threaded.io();
+    mem_mutex.lockUncancelable(io);
+    defer mem_mutex.unlock(io);
 
     const old_size = if (ptr != null) mem_allocations.?.get(@intFromPtr(ptr.?)).? else 0;
     const old_mem = if (old_size > 0)
@@ -430,8 +432,9 @@ extern var zstbiwFreePtr: ?*const fn (maybe_ptr: ?*anyopaque) callconv(.c) void;
 
 fn zstbiFree(maybe_ptr: ?*anyopaque) callconv(.c) void {
     if (maybe_ptr) |ptr| {
-        mem_mutex.lock();
-        defer mem_mutex.unlock();
+        const io = std.Io.Threaded.global_single_threaded.io();
+        mem_mutex.lockUncancelable(io);
+        defer mem_mutex.unlock(io);
 
         const size = mem_allocations.?.fetchRemove(@intFromPtr(ptr)).?.value;
         const mem = @as([*]align(mem_alignment) u8, @ptrCast(@alignCast(ptr)))[0..size];
@@ -590,9 +593,13 @@ test "zstbi write and load file" {
     init(testing.allocator);
     defer deinit();
 
-    const pth = try std.fs.selfExeDirPathAlloc(testing.allocator);
-    defer testing.allocator.free(pth);
-    try std.posix.chdir(pth);
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const pth_len = try tmp_dir.dir.realPath(io, &path_buf);
+    try std.Io.Threaded.chdir(path_buf[0..pth_len]);
 
     var img = try Image.createEmpty(8, 6, 4, .{});
     defer img.deinit();
@@ -613,7 +620,5 @@ test "zstbi write and load file" {
     try testing.expect(img_jpg.width == img.width);
     try testing.expect(img_jpg.height == img.height);
     try testing.expect(img_jpg.num_components == 3); // RGB JPEG
-
-    try std.fs.cwd().deleteFile("test_img.png");
-    try std.fs.cwd().deleteFile("test_img.jpg");
+    // test files cleaned up by tmp_dir.cleanup()
 }
