@@ -9,6 +9,13 @@ pub fn build(b: *std.Build) void {
     });
 
     zstbi.addIncludePath(b.path("libs/stbi"));
+
+    if (target.result.os.tag == .emscripten) {
+        if (b.sysroot) |sysroot| {
+            const include_path = std.fs.path.join(b.allocator, &.{ sysroot, "include" }) catch @panic("OOM");
+            zstbi.addIncludePath(.{ .cwd_relative = include_path });
+        }
+    }
     if (optimize == .Debug) {
         // TODO: Workaround for Zig bug.
         zstbi.addCSourceFile(.{
