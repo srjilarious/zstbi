@@ -9,7 +9,16 @@ pub fn build(b: *std.Build) void {
     });
 
     zstbi.addIncludePath(b.path("libs/stbi"));
-    if (optimize == .Debug) {
+
+    if (target.result.os.tag == .emscripten) {
+        // Zig 0.17 no longer exposes the --sysroot flag to build.zig, so the
+        // emscripten sysroot is taken from the EMSCRIPTEN_SYSROOT env var.
+        if (b.graph.environ_map.get("EMSCRIPTEN_SYSROOT")) |sysroot| {
+            const include_path = std.fs.path.join(b.allocator, &.{ sysroot, "include" }) catch @panic("OOM");
+            zstbi.addIncludePath(.{ .cwd_relative = include_path });
+        }
+    }
+    if (optimize == .debug) {
         // TODO: Workaround for Zig bug.
         zstbi.addCSourceFile(.{
             .file = b.path("src/zstbi.c"),
